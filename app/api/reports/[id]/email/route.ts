@@ -20,5 +20,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
   const resend = new Resend(apiKey)
   const result = await resend.emails.send({ from: process.env.REPORT_FROM_EMAIL ?? 'reports@example.com', to: parsed.data.email, subject: report.name, text: 'Your performance report is attached.', attachments: [{ filename: `${report.name.replace(/[^a-z0-9]+/gi, '-').toLowerCase()}.pdf`, content: report.blob_path.slice('data:application/pdf;base64,'.length) }] })
   if (result.error) return NextResponse.json({ error: 'Could not send report email.' }, { status: 502 })
+  const { error: updateError } = await supabase.from('reports').update({ delivery_status: 'email_sent', email_sent_at: new Date().toISOString() }).eq('id', id).eq('agency_id', workspace.agency.id)
+  if (updateError) return NextResponse.json({ error: 'Email sent, but delivery status could not be updated.' }, { status: 502 })
   return NextResponse.json({ sent: true })
 }
