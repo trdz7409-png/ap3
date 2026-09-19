@@ -1,6 +1,6 @@
 import { PDFDocument, StandardFonts, rgb } from 'pdf-lib'
 
-export type ReportSnapshot = { agency: string; client: string; period: string; currency: string; impressions: number; clicks: number; spend: number; conversions: number; campaigns: Array<{ name: string; impressions: number; clicks: number; spend: number; conversions: number }> }
+export type ReportSnapshot = { agency: string; client: string; period: string; currency: string; impressions: number; clicks: number; spend: number; conversions: number; campaigns: Array<{ name: string; impressions: number; clicks: number; spend: number; conversions: number }>; source?: string; adAccount?: string; reportingPeriodStart?: string; reportingPeriodEnd?: string; lastSyncedAt?: string; generatedAt?: string; reportVersion?: number }
 
 export async function createReportPdf(snapshot: ReportSnapshot) {
   const pdf = await PDFDocument.create()
