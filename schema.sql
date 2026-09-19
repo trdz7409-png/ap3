@@ -95,6 +95,10 @@ create table if not exists public.reports (
   status text not null default 'draft' check (status in ('draft','generating','ready','failed')),
   blob_path text,
   snapshot jsonb not null default '{}'::jsonb,
+  source text not null default 'Google Ads',
+  report_version integer not null default 1,
+  last_synced_at timestamptz,
+  delivery_status text not null default 'generated' check (delivery_status in ('generated','shared','email_sent')),
   created_by uuid not null references auth.users(id) on delete restrict,
   created_at timestamptz not null default now(),
   completed_at timestamptz
