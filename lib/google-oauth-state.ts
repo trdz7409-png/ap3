@@ -26,8 +26,13 @@ function readSignedState(value: string | undefined) {
   const [encoded, signature] = value.split('.')
   const expected = encoded ? sign(encoded) : ''
   if (!encoded || !signature || signature.length !== expected.length || !crypto.timingSafeEqual(Buffer.from(signature), Buffer.from(expected))) return null
-  const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as OAuthState
-  return payload.expiresAt >= Date.now() ? payload : null
+  try {
+    const payload = JSON.parse(Buffer.from(encoded, 'base64url').toString('utf8')) as OAuthState
+    if (!payload.nonce || !payload.userId || !payload.agencyId || !Number.isFinite(payload.expiresAt)) return null
+    return payload.expiresAt >= Date.now() ? payload : null
+  } catch {
+    return null
+  }
 }
 
 export function verifyOAuthState(value: string | undefined, expectedUserId: string, expectedAgencyId: string) {
