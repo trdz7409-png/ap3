@@ -5,7 +5,14 @@ export async function getWorkspace() {
   const { data: { user } } = await supabase.auth.getUser()
   if (!user) return null
 
-  const { data: existing } = await supabase.from('agencies').select('id,name,brand_color,timezone').limit(1).maybeSingle()
+  const { data: existing, error: existingError } = await supabase
+    .from('agencies')
+    .select('id,name,brand_color,timezone,agency_members!inner(user_id)')
+    .eq('agency_members.user_id', user.id)
+    .order('created_at', { ascending: true })
+    .limit(1)
+    .maybeSingle()
+  if (existingError) throw existingError
   if (existing) return { user, agency: existing }
 
   const base = (user.user_metadata.full_name || user.email?.split('@')[0] || 'My agency').trim()
