@@ -95,10 +95,25 @@ create table if not exists public.reports (
   status text not null default 'draft' check (status in ('draft','generating','ready','failed')),
   blob_path text,
   snapshot jsonb not null default '{}'::jsonb,
+  source text not null default 'Google Ads',
+  report_version integer not null default 1,
+  last_synced_at timestamptz,
+  delivery_status text not null default 'generated' check (delivery_status in ('generated','shared','email_sent')),
+  shared_at timestamptz,
+  email_sent_at timestamptz,
   created_by uuid not null references auth.users(id) on delete restrict,
   created_at timestamptz not null default now(),
   completed_at timestamptz
 );
+
+alter table public.reports add column if not exists source text not null default 'Google Ads';
+alter table public.reports add column if not exists report_version integer not null default 1;
+alter table public.reports add column if not exists last_synced_at timestamptz;
+alter table public.reports add column if not exists delivery_status text not null default 'generated';
+alter table public.reports add column if not exists shared_at timestamptz;
+alter table public.reports add column if not exists email_sent_at timestamptz;
+alter table public.reports drop constraint if exists reports_delivery_status_check;
+alter table public.reports add constraint reports_delivery_status_check check (delivery_status in ('generated','shared','email_sent'));
 
 create table if not exists public.report_shares (
   id uuid primary key default gen_random_uuid(),
