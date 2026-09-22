@@ -5,19 +5,31 @@ import { decryptSecret } from '@/lib/encryption'
 
 const apiBase = 'https://googleads.googleapis.com/v19'
 
+async function readJsonResponse(response: Response) {
+  const text = await response.text()
+  if (!text) return null
+  try {
+    return JSON.parse(text) as Record<string, unknown>
+  } catch {
+    const contentType = response.headers.get('content-type') ?? 'unknown'
+    const preview = text.replace(/\\s+/g, ' ').slice(0, 180)
+    throw new Error(`Google returned a non-JSON response (${response.status}, ${contentType}): ${preview}`)
+  }
+}
+
 async function refreshAccessToken(refreshToken: string) {
   const response = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ refresh_token: refreshToken, client_id: process.env.GOOGLE_CLIENT_ID!, client_secret: process.env.GOOGLE_CLIENT_SECRET!, grant_type: 'refresh_token' }) })
-  const data = await response.json() as { access_token?: string; error?: string }
-  if (!response.ok || !data.access_token) throw new Error(data.error || 'Could not refresh Google access token.')
+  const data = await readJsonResponse(response) as { access_token?: string; error?: string } | null
+  if (!response.ok || !data?.access_token) throw new Error(data?.error || 'Could not refresh Google access token.')
   return data.access_token
 }
 
-async function googleRequest(path: string, token: string, body?: unknown) {
-  const headers = { authorization: `Bearer ${token}`, 'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN!, 'content-type': 'application/json' }
+async function googleRequest<T>(path: string, token: string, body?: unknown) {
+  const headers = { authorization: `Bearer ${token}`, 'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN!, 'content-type': 'application/json', accept: 'application/json' }
   const response = await fetch(`${apiBase}${path}`, { method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined })
-  const data = await response.json()
-  if (!response.ok) throw new Error(data?.error?.message || 'Google Ads request failed.')
-  return data
+  const data = await readJsonResponse(response) as { error?: { message?: string } } | null
+  if (!response.ok) throw new Error(data?.error?.message || `Google Ads request failed (${response.status}).`)
+  return data as T
 }
 
 export async function POST() {
@@ -32,8 +44,8 @@ export async function POST() {
 
     const token = await refreshAccessToken(decryptSecret(connection.encrypted_refresh_token, connection.token_iv, connection.token_tag))
     const loginCustomerId = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID?.replace(/-/g, '')
-    const accessible = await googleRequest('/customers:listAccessibleCustomers', token)
-    const resourceNames = (accessible.resourceNames ?? []) as string[]
+    const accessible = await googleRequest<{ resourceNames?: string[] }>('/customers:listAccessibleCustomers', token)
+    const resourceNames = accessible?.resourceNames ?? []
     let synced = 0
     const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
     const until = new Date().toISOString().slice(0, 10)
@@ -43,7 +55,7 @@ export async function POST() {
       if (!customerId) continue
       const headersPath = `/customers/${customerId}/googleAds:searchStream`
       const query = `SELECT customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM campaign WHERE segments.date BETWEEN '${since}' AND '${until}'`
-      const rows = await googleRequest(headersPath, token, { query, ...(loginCustomerId ? { loginCustomerId } : {}) })
+      const rows = await googleRequest<Array<{ results?: Array<{ customer?: { descriptiveName?: string; currencyCode?: string }; campaign?: Record<string, unknown>; segments?: Record<string, unknown>; metrics?: Record<string, unknown> }> }>>(headersPath, token, { query, ...(loginCustomerId ? { loginCustomerId } : {}) })
       const { data: account, error: accountError } = await supabase.from('ad_accounts').upsert({ agency_id: workspace.agency.id, customer_id: customerId, descriptive_name: rows?.[0]?.results?.[0]?.customer?.descriptiveName ?? `Google Ads ${customerId}`, currency_code: rows?.[0]?.results?.[0]?.customer?.currencyCode ?? 'USD', last_synced_at: new Date().toISOString(), sync_error: null }, { onConflict: 'agency_id,customer_id' }).select('id').single()
       if (accountError || !account) continue
       const metrics = (rows ?? []).flatMap((batch: { results?: Array<Record<string, unknown>> }) => batch.results ?? [])
