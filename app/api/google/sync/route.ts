@@ -3,7 +3,7 @@ import { createClient } from '@/lib/supabase/server'
 import { getWorkspace } from '@/lib/workspace'
 import { decryptSecret } from '@/lib/encryption'
 
-const apiBase = 'https://googleads.googleapis.com/v19'
+const apiBase = 'https://googleads.googleapis.com/v22'
 
 async function readJsonResponse(response: Response) {
   const text = await response.text()
