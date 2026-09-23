@@ -35,6 +35,9 @@ function formatGoogleAdsError(status: number, data: { error?: { message?: string
   const firstError = failure?.errors?.[0]
   const code = firstError?.errorCode ? Object.entries(firstError.errorCode).map(([key, value]) => `${key}=${String(value)}`).join(', ') : data?.error?.status
   const parts = [`Google Ads request failed (${status})`]
+  if (status === 403) {
+    parts.push('Google Ads rejected the developer token or login customer ID; use an approved developer token and the manager customer ID without dashes')
+  }
   if (code) parts.push(`code: ${code}`)
   if (firstError?.message || data?.error?.message) parts.push(`message: ${firstError?.message ?? data?.error?.message}`)
   if (requestId) parts.push(`request ID: ${requestId}`)
@@ -62,7 +65,7 @@ export async function POST() {
 
     const token = await refreshAccessToken(decryptSecret(connection.encrypted_refresh_token, connection.token_iv, connection.token_tag))
     const loginCustomerId = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID?.replace(/-/g, '')
-    const accessible = await googleRequest<{ resourceNames?: string[] }>('/customers:listAccessibleCustomers', token)
+    const accessible = await googleRequest<{ resourceNames?: string[] }>('/customers:listAccessibleCustomers', token, undefined, loginCustomerId)
     const resourceNames = accessible?.resourceNames ?? []
     let synced = 0
     const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
