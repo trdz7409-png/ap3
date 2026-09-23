@@ -24,11 +24,29 @@ async function refreshAccessToken(refreshToken: string) {
   return data.access_token
 }
 
-async function googleRequest<T>(path: string, token: string, body?: unknown) {
-  const headers = { authorization: `Bearer ${token}`, 'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN!, 'content-type': 'application/json', accept: 'application/json' }
+type GoogleAdsFailure = {
+  errors?: Array<{ errorCode?: Record<string, unknown>; message?: string; location?: unknown }>
+  requestId?: string
+}
+
+function formatGoogleAdsError(status: number, data: { error?: { message?: string; status?: string; details?: Array<{ '@type'?: string; errors?: GoogleAdsFailure['errors'] }> } } | null, requestId: string | null) {
+  const detail = data?.error?.details?.find(item => item['@type']?.includes('GoogleAdsFailure'))
+  const failure = detail ? { errors: detail.errors } : null
+  const firstError = failure?.errors?.[0]
+  const code = firstError?.errorCode ? Object.entries(firstError.errorCode).map(([key, value]) => `${key}=${String(value)}`).join(', ') : data?.error?.status
+  const parts = [`Google Ads request failed (${status})`]
+  if (code) parts.push(`code: ${code}`)
+  if (firstError?.message || data?.error?.message) parts.push(`message: ${firstError?.message ?? data?.error?.message}`)
+  if (requestId) parts.push(`request ID: ${requestId}`)
+  return `${parts.join('; ')}.`
+}
+
+async function googleRequest<T>(path: string, token: string, body?: unknown, loginCustomerId?: string) {
+  const headers: Record<string, string> = { authorization: `Bearer ${token}`, 'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN!, 'content-type': 'application/json', accept: 'application/json' }
+  if (loginCustomerId) headers['login-customer-id'] = loginCustomerId
   const response = await fetch(`${apiBase}${path}`, { method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined })
-  const data = await readJsonResponse(response) as { error?: { message?: string } } | null
-  if (!response.ok) throw new Error(data?.error?.message || `Google Ads request failed (${response.status}).`)
+  const data = await readJsonResponse(response) as { error?: { message?: string; status?: string; details?: Array<{ '@type'?: string; errors?: GoogleAdsFailure['errors'] }> } } | null
+  if (!response.ok) throw new Error(formatGoogleAdsError(response.status, data, response.headers.get('google-ads-request-id')))
   return data as T
 }
 
@@ -51,11 +69,11 @@ export async function POST() {
     const until = new Date().toISOString().slice(0, 10)
 
     for (const resourceName of resourceNames) {
-      const customerId = resourceName.split('/').pop()
+      const customerId = resourceName.split('/').pop()?.replace(/\D/g, '')
       if (!customerId) continue
       const headersPath = `/customers/${customerId}/googleAds:searchStream`
       const query = `SELECT customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM campaign WHERE segments.date BETWEEN '${since}' AND '${until}'`
-      const rows = await googleRequest<Array<{ results?: Array<{ customer?: { descriptiveName?: string; currencyCode?: string }; campaign?: Record<string, unknown>; segments?: Record<string, unknown>; metrics?: Record<string, unknown> }> }>>(headersPath, token, { query, ...(loginCustomerId ? { loginCustomerId } : {}) })
+      const rows = await googleRequest<Array<{ results?: Array<{ customer?: { descriptiveName?: string; currencyCode?: string }; campaign?: Record<string, unknown>; segments?: Record<string, unknown>; metrics?: Record<string, unknown> }> }>>(headersPath, token, { query }, loginCustomerId)
       const { data: account, error: accountError } = await supabase.from('ad_accounts').upsert({ agency_id: workspace.agency.id, customer_id: customerId, descriptive_name: rows?.[0]?.results?.[0]?.customer?.descriptiveName ?? `Google Ads ${customerId}`, currency_code: rows?.[0]?.results?.[0]?.customer?.currencyCode ?? 'USD', last_synced_at: new Date().toISOString(), sync_error: null }, { onConflict: 'agency_id,customer_id' }).select('id').single()
       if (accountError || !account) continue
       const metrics = (rows ?? []).flatMap((batch: { results?: Array<Record<string, unknown>> }) => batch.results ?? [])
