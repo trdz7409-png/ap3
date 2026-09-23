@@ -5,6 +5,22 @@ import { decryptSecret } from '@/lib/encryption'
 
 const apiBase = 'https://googleads.googleapis.com/v22'
 
+function normalizeCustomerId(value: string | undefined) {
+  return value?.replace(/\\D/g, '') || undefined
+}
+
+function validateGoogleAdsConfiguration() {
+  const developerToken = process.env.GOOGLE_ADS_DEVELOPER_TOKEN?.trim()
+  const loginCustomerId = normalizeCustomerId(process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID)
+  if (!developerToken || developerToken.length < 10 || /test[_-]?123/i.test(developerToken)) {
+    throw new Error('Google Ads developer token is missing or still a test placeholder. Use the approved developer token from Google Ads API Center.')
+  }
+  if (process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID && loginCustomerId?.length !== 10) {
+    throw new Error('Google Ads login customer ID must contain exactly 10 digits, without dashes.')
+  }
+  return { developerToken, loginCustomerId }
+}
+
 async function readJsonResponse(response: Response) {
   const text = await response.text()
   if (!text) return null
@@ -44,8 +60,8 @@ function formatGoogleAdsError(status: number, data: { error?: { message?: string
   return `${parts.join('; ')}.`
 }
 
-async function googleRequest<T>(path: string, token: string, body?: unknown, loginCustomerId?: string) {
-  const headers: Record<string, string> = { authorization: `Bearer ${token}`, 'developer-token': process.env.GOOGLE_ADS_DEVELOPER_TOKEN!, 'content-type': 'application/json', accept: 'application/json' }
+async function googleRequest<T>(path: string, token: string, developerToken: string, body?: unknown, loginCustomerId?: string) {
+  const headers: Record<string, string> = { authorization: `Bearer ${token}`, 'developer-token': developerToken, 'content-type': 'application/json', accept: 'application/json' }
   if (loginCustomerId) headers['login-customer-id'] = loginCustomerId
   const response = await fetch(`${apiBase}${path}`, { method: body ? 'POST' : 'GET', headers, body: body ? JSON.stringify(body) : undefined })
   const data = await readJsonResponse(response) as { error?: { message?: string; status?: string; details?: Array<{ '@type'?: string; errors?: GoogleAdsFailure['errors'] }> } } | null
@@ -60,12 +76,20 @@ export async function POST() {
     const supabase = await createClient()
     const { data: connection } = await supabase.from('google_connections').select('*').eq('agency_id', workspace.agency.id).maybeSingle()
     if (!connection) return NextResponse.json({ error: 'Connect Google Ads first.' }, { status: 400 })
-    const required = ['GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'GOOGLE_ADS_DEVELOPER_TOKEN']
-    if (required.some(key => !process.env[key])) return NextResponse.json({ error: 'Google Ads server configuration is incomplete.' }, { status: 503 })
+    if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET) {
+      return NextResponse.json({ error: 'Google OAuth server configuration is incomplete.' }, { status: 503 })
+    }
+
+    let googleAdsConfig: ReturnType<typeof validateGoogleAdsConfiguration>
+    try {
+      googleAdsConfig = validateGoogleAdsConfiguration()
+    } catch (error) {
+      return NextResponse.json({ error: error instanceof Error ? error.message : 'Google Ads server configuration is invalid.' }, { status: 503 })
+    }
 
     const token = await refreshAccessToken(decryptSecret(connection.encrypted_refresh_token, connection.token_iv, connection.token_tag))
-    const loginCustomerId = process.env.GOOGLE_ADS_LOGIN_CUSTOMER_ID?.replace(/-/g, '')
-    const accessible = await googleRequest<{ resourceNames?: string[] }>('/customers:listAccessibleCustomers', token, undefined, loginCustomerId)
+    // Google ignores login-customer-id for listAccessibleCustomers; sending it here can cause a misleading 403.
+    const accessible = await googleRequest<{ resourceNames?: string[] }>('/customers:listAccessibleCustomers', token, googleAdsConfig.developerToken)
     const resourceNames = accessible?.resourceNames ?? []
     let synced = 0
     const since = new Date(Date.now() - 30 * 86400000).toISOString().slice(0, 10)
@@ -76,7 +100,7 @@ export async function POST() {
       if (!customerId) continue
       const headersPath = `/customers/${customerId}/googleAds:searchStream`
       const query = `SELECT customer.id, customer.descriptive_name, customer.currency_code, campaign.id, campaign.name, campaign.status, segments.date, metrics.impressions, metrics.clicks, metrics.cost_micros, metrics.conversions FROM campaign WHERE segments.date BETWEEN '${since}' AND '${until}'`
-      const rows = await googleRequest<Array<{ results?: Array<{ customer?: { descriptiveName?: string; currencyCode?: string }; campaign?: Record<string, unknown>; segments?: Record<string, unknown>; metrics?: Record<string, unknown> }> }>>(headersPath, token, { query }, loginCustomerId)
+      const rows = await googleRequest<Array<{ results?: Array<{ customer?: { descriptiveName?: string; currencyCode?: string }; campaign?: Record<string, unknown>; segments?: Record<string, unknown>; metrics?: Record<string, unknown> }> }>>(headersPath, token, googleAdsConfig.developerToken, { query }, googleAdsConfig.loginCustomerId)
       const { data: account, error: accountError } = await supabase.from('ad_accounts').upsert({ agency_id: workspace.agency.id, customer_id: customerId, descriptive_name: rows?.[0]?.results?.[0]?.customer?.descriptiveName ?? `Google Ads ${customerId}`, currency_code: rows?.[0]?.results?.[0]?.customer?.currencyCode ?? 'USD', last_synced_at: new Date().toISOString(), sync_error: null }, { onConflict: 'agency_id,customer_id' }).select('id').single()
       if (accountError || !account) continue
       const metrics = (rows ?? []).flatMap((batch: { results?: Array<Record<string, unknown>> }) => batch.results ?? [])
