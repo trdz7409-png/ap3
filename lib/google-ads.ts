@@ -6,7 +6,7 @@ type AdsError = { error?: { message?: string; status?: string; details?: Array<{
 export type GoogleAdsAccount = { customerId: string; descriptiveName: string; currencyCode: string; timeZone: string; isManager: boolean }
 
 export function normalizeCustomerId(value: string | undefined | null) {
-  const normalized = value?.replace(/\\D/g, '')
+  const normalized = value?.replace(/\D/g, '')
   return normalized || undefined
 }
 
@@ -74,7 +74,7 @@ export async function searchStream(accessToken: string, customerId: string, quer
   const requestId = response.headers.get('google-ads-request-id')
   const text = await response.text()
   if (!response.ok) { let data: AdsError | null = null; try { data = JSON.parse(text) as AdsError } catch {} ; const [category, message] = classify(response.status, data, requestId); throw new GoogleAdsClientError(category, message, response.status, requestId ?? undefined) }
-  return text.split(/\\r?\\n/).filter(Boolean).flatMap(line => { try { return [JSON.parse(line) as Record<string, unknown>] } catch { return [] } }).flatMap(batch => Array.isArray(batch.results) ? batch.results as Array<Record<string, unknown>> : [])
+  return text.split(/\r?\n/).filter(Boolean).flatMap(line => { try { return [JSON.parse(line) as Record<string, unknown>] } catch { return [] } }).flatMap(batch => Array.isArray(batch.results) ? batch.results as Array<Record<string, unknown>> : [])
 }
 
 export async function discoverAdvertiserAccounts(accessToken: string) {
