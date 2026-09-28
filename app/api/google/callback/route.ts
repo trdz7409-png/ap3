@@ -23,7 +23,7 @@ export async function GET(request: Request) {
     const oauthState = verifyOAuthState(state, user.id, membership?.agency_id ?? '')
     if (!oauthState) throw new Error('Invalid or expired OAuth state.')
     const clientId = process.env.GOOGLE_CLIENT_ID
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET
+    const clientSecret = process.env.secret ?? process.env.GOOGLE_CLIENT_SECRET
     if (!clientId || !clientSecret) throw new Error('Google OAuth is not configured.')
 
     const tokenResponse = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code' }) })

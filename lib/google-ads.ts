@@ -29,7 +29,7 @@ async function parseResponse(response: Response): Promise<AdsError | null> {
 }
 
 export async function refreshAccessToken(refreshToken: string) {
-  const response = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ refresh_token: refreshToken, client_id: process.env.GOOGLE_CLIENT_ID ?? '', client_secret: process.env.GOOGLE_CLIENT_SECRET ?? '', grant_type: 'refresh_token' }) })
+  const response = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ refresh_token: refreshToken, client_id: process.env.GOOGLE_CLIENT_ID ?? '', client_secret: process.env.secret ?? process.env.GOOGLE_CLIENT_SECRET ?? '', grant_type: 'refresh_token' }) })
   const data = await parseResponse(response) as { access_token?: string; error?: string } | null
   if (!response.ok || !data?.access_token) throw new GoogleAdsClientError('oauth', 'Google authorization expired or was revoked. Reconnect Google Ads.', response.status)
   return data.access_token
