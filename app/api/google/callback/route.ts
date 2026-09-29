@@ -23,17 +23,20 @@ export async function GET(request: Request) {
     const oauthState = verifyOAuthState(state, user.id, membership?.agency_id ?? '')
     if (!oauthState) throw new Error('Invalid or expired OAuth state.')
     const clientId = process.env.GOOGLE_CLIENT_ID
-    const clientSecret = process.env.GOOGLE_CLIENT_SECRET
+    const clientSecret = process.env.secret ?? process.env.GOOGLE_CLIENT_SECRET
     if (!clientId || !clientSecret) throw new Error('Google OAuth is not configured.')
 
     const tokenResponse = await fetch('https://oauth2.googleapis.com/token', { method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded' }, body: new URLSearchParams({ code, client_id: clientId, client_secret: clientSecret, redirect_uri: redirectUri, grant_type: 'authorization_code' }) })
     const tokens = await tokenResponse.json() as { refresh_token?: string; access_token?: string; scope?: string; error?: string }
-    if (!tokenResponse.ok || !tokens.refresh_token) throw new Error(tokens.error || 'Google did not return a refresh token.')
+    if (!tokenResponse.ok || !tokens.access_token) throw new Error(tokens.error || 'Google did not return an access token.')
 
     const googleUserResponse = await fetch('https://www.googleapis.com/oauth2/v3/userinfo', { headers: { authorization: `Bearer ${tokens.access_token}` } })
     const googleUser = googleUserResponse.ok ? await googleUserResponse.json() as { email?: string } : {}
-    const encrypted = encryptSecret(tokens.refresh_token)
-    const { error } = await supabase.from('google_connections').upsert({ agency_id: oauthState.agencyId, google_email: googleUser.email ?? null, encrypted_refresh_token: encrypted.encrypted, token_iv: encrypted.iv, token_tag: encrypted.tag, scope: tokens.scope ?? 'https://www.googleapis.com/auth/adwords', updated_at: new Date().toISOString() }, { onConflict: 'agency_id' })
+    const { data: existingConnection } = await supabase.from('google_connections').select('encrypted_refresh_token, token_iv, token_tag, google_email').eq('agency_id', oauthState.agencyId).maybeSingle()
+    const refreshToken = tokens.refresh_token
+    const encrypted = refreshToken ? encryptSecret(refreshToken) : existingConnection?.encrypted_refresh_token ? { encrypted: existingConnection.encrypted_refresh_token, iv: existingConnection.token_iv, tag: existingConnection.token_tag } : null
+    if (!encrypted) throw new Error('Google did not return a refresh token. Revoke this app in Google Account security, then reconnect and approve access again.')
+    const { error } = await supabase.from('google_connections').upsert({ agency_id: oauthState.agencyId, google_email: googleUser.email ?? existingConnection?.google_email ?? null, encrypted_refresh_token: encrypted.encrypted, token_iv: encrypted.iv, token_tag: encrypted.tag, scope: tokens.scope ?? 'https://www.googleapis.com/auth/adwords', updated_at: new Date().toISOString() }, { onConflict: 'agency_id' })
     if (error) throw error
     const response = NextResponse.redirect(new URL('/?google=connected', request.url))
     response.cookies.delete(stateCookie)
